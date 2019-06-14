@@ -126,7 +126,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	// /account/page -> GIF + log pageview to GA collector
 	var cid string
-	if cookie, err := r.Cookie("cidx"); err != nil {
+	if cookie, err := r.Cookie("cid"); err != nil {
 		if err := generateUUID(&cid); err != nil {
 			c.Debugf("Failed to generate client UUID: %v", err)
 		} else {
