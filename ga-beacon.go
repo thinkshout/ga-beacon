@@ -1,8 +1,6 @@
 package beacon
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"html/template"
 	"io/ioutil"
@@ -11,12 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/uuid"
+
 	"appengine"
 	"appengine/delay"
 	"appengine/urlfetch"
 )
 
-const beaconURL = "http://www.google-analytics.com/collect"
+const beaconURL = "https://www.google-analytics.com/collect"
 
 var (
 	pixel        = mustReadFile("static/pixel.gif")
@@ -40,15 +40,7 @@ func mustReadFile(path string) []byte {
 }
 
 func generateUUID(cid *string) error {
-	b := make([]byte, 16)
-	_, err := rand.Read(b)
-	if err != nil {
-		return err
-	}
-
-	b[8] = (b[8] | 0x80) & 0xBF // what's the purpose ?
-	b[6] = (b[6] | 0x40) & 0x4F // what's the purpose ?
-	*cid = hex.EncodeToString(b)
+	*cid = uuid.Must(uuid.NewV4()).String()
 	return nil
 }
 
@@ -56,13 +48,13 @@ var delayHit = delay.Func("collect", logHit)
 
 func log(c appengine.Context, ua string, ip string, cid string, values url.Values) error {
 	req, _ := http.NewRequest("POST", beaconURL, strings.NewReader(values.Encode()))
-	req.Header.Add("User-Agent", ua)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 
 	if resp, err := urlfetch.Client(c).Do(req); err != nil {
 		c.Errorf("GA collector POST error: %s", err.Error())
 		return err
 	} else {
+		c.Debugf("Encoded values: %s", values.Encode())
 		c.Debugf("GA collector status: %v, cid: %v, ip: %s", resp.Status, cid, ip)
 		c.Debugf("Reported payload: %v", values)
 	}
@@ -80,20 +72,22 @@ func logHit(c appengine.Context, params []string, query url.Values, ua string, i
 		"t":   {"pageview"}, // hit type
 		"tid": {params[0]},  // tracking / property ID
 		"cid": {cid},        // unique client ID (server generated UUID)
-		"dp":  {params[1]},  // page path
+		"dh":  {params[1]},  // page host
+		"dp":  {params[2]},  // page path
 		"uip": {ip},         // IP address of the user
+		"ua":  {ua},         // User Agent
 	}
 
-	for key, val := range query {
-		payload[key] = val
-	}
+	// for key, val := range query {
+	// 	payload[key] = val
+	// }
 
 	return log(c, ua, ip, cid, payload)
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
-	params := strings.SplitN(strings.Trim(r.URL.Path, "/"), "/", 2)
+	params := strings.SplitN(strings.Trim(r.URL.Path, "/"), "/", 3)
 	query, _ := url.ParseQuery(r.URL.RawQuery)
 	refOrg := r.Header.Get("Referer")
 
@@ -132,7 +126,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	// /account/page -> GIF + log pageview to GA collector
 	var cid string
-	if cookie, err := r.Cookie("cid"); err != nil {
+	if cookie, err := r.Cookie("cidx"); err != nil {
 		if err := generateUUID(&cid); err != nil {
 			c.Debugf("Failed to generate client UUID: %v", err)
 		} else {
